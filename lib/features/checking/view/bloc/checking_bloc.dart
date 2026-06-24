@@ -13,6 +13,7 @@ import '../../../../base/bloc/index.dart';
 import '../../../../common/logger/index.dart';
 import '../../../../common/notification/index.dart';
 import '../../../../common/services/index.dart';
+import '../../../../common/services/location_preference_service.dart';
 import '../../data/datasource/model/saved_location.dart';
 import '../../data/repository/checking_repo.dart';
 
@@ -27,6 +28,7 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
   final CheckingRepo _repo;
   final NotificationService _notificationService;
   final LocationServiceManager _locationServiceManager;
+  final LocationPreferenceService _preferenceService;
 
   MapboxMap? mapboxMap;
   CircleAnnotationManager? circleAnnotationManager;
@@ -40,6 +42,7 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
     this._repo,
     this._notificationService,
     this._locationServiceManager,
+    this._preferenceService,
   ) : super(CheckingState.init()) {
     WidgetsBinding.instance.addObserver(this);
     _setupLocationServiceCallbacks();
@@ -203,8 +206,15 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
   }
 
   Future<void> _checkLocationOnResume(Emitter<CheckingState> emit) async {
-    // Restart location tracking on resume
+    // Restart Flutter location tracking
     _startLocationTracking();
+
+    // Restart native service if there's a selected location
+    if (state.selectedLocationId != null) {
+      await _locationServiceManager.stopService();
+      add(CheckingEvent.startLocationService());
+      _log.logI('Native service restarted on resume for location: ${state.selectedLocationId}');
+    }
   }
 
   bool _isLocationDuplicate(double lat, double lng) {
@@ -480,8 +490,21 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
         status: BaseStateStatus.success,
       ));
 
-      // Auto-select first location only if forceSelect is true or no location selected
-      if (forceSelect || state.selectedLocationId == null) {
+      // Restore previously selected location from preferences
+      final savedSelectedId = _preferenceService.selectedLocationId;
+      
+      if (savedSelectedId != null && locations.any((loc) => loc.id == savedSelectedId)) {
+        // Restore the previously selected location
+        final savedLocation = locations.firstWhere((loc) => loc.id == savedSelectedId);
+        await _selectLocation(
+          savedLocation.id,
+          savedLocation.lat,
+          savedLocation.lng,
+          emit,
+        );
+        _log.logI('Restored selected location: ${savedLocation.title}');
+      } else if (forceSelect || state.selectedLocationId == null) {
+        // Auto-select first location only if forceSelect is true or no location selected
         if (locations.isNotEmpty) {
           final enabledLocation = locations.firstWhere(
             (loc) => loc.notificationEnabled,
@@ -525,6 +548,9 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
 
     await circleAnnotationManager?.deleteAll();
     savedLocationId = id;
+
+    // Save selected location to preferences for restore on app resume
+    await _preferenceService.setSelectedLocationId(id);
 
     // Reset alarm state when selecting new location
     emit(state.copyWith(

@@ -7,6 +7,7 @@ import 'common/constants/api_config.dart';
 import 'common/logger/index.dart';
 import 'common/notification/index.dart';
 import 'common/services/index.dart';
+import 'common/services/location_preference_service.dart';
 import 'common/utils/snack_bar_helper.dart';
 import 'features/checking/data/datasource/service/checking_service.dart';
 import 'features/checking/data/datasource/service/supabase_service.dart';
@@ -84,6 +85,7 @@ void configDependencies() {
       getIt<CheckingRepo>(),
       getIt<NotificationService>(),
       getIt<LocationServiceManager>(),
+      getIt<LocationPreferenceService>(),
     ),
   );
 }

@@ -54,6 +54,7 @@ dependencies:
   get_it:
   go_router:
   injectable:
+  shared_preferences:
 
   # Permission
   permission_handler: ^11.3.1

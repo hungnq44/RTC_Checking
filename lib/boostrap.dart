@@ -5,12 +5,14 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app.dart';
 import 'base/bloc/app_bloc_observer.dart';
 import 'common/app/app_initializer.dart';
 import 'common/notification/index.dart';
+import 'common/services/location_preference_service.dart';
 import 'injection.dart';
 
 Future<void> bootstrap(String envFile) async {
@@ -34,6 +36,10 @@ Future<void> bootstrap(String envFile) async {
     }
 
     configDependencies();
+
+    // Initialize SharedPreferences and register service
+    final prefs = await SharedPreferences.getInstance();
+    getIt.registerSingleton<LocationPreferenceService>(LocationPreferenceService(prefs));
 
     Bloc.observer = const AppBlocObserver();
     await EasyLocalization.ensureInitialized();

@@ -125,6 +125,17 @@ class LocationService : Service() {
         stopLocationUpdates()
         stopAlarm()
         isServiceRunning = false
+        Log.d(TAG, "Service destroyed")
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d(TAG, "Task removed - stopping service")
+        stopLocationUpdates()
+        stopAlarm()
+        isServiceRunning = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun startForegroundService() {
@@ -180,12 +191,23 @@ class LocationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val stopIntent = Intent(this, LocationService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Đang theo dõi vị trí")
             .setContentText("Nhắn tin khi bạn đến $targetTitle")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .addAction(android.R.drawable.ic_delete, "Dừng", stopPendingIntent)
             .build()
     }
 
