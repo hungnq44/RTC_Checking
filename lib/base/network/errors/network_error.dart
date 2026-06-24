@@ -1,0 +1,12 @@
+import 'package:freezed_annotation/freezed_annotation.dart';
+
+part 'network_error.freezed.dart';
+
+@freezed
+class BaseError with _$BaseError {
+  const factory BaseError.httpInternalServerError(String errorBody) =
+      HttpInternalServerError;
+  const factory BaseError.httpUnAuthorizedError() = HttpUnAuthorizedError;
+
+  const factory BaseError.httpUnknownError(String message) = HttpUnknownError;
+}
