@@ -22,4 +22,8 @@ class CheckingEvent with _$CheckingEvent {
   const factory CheckingEvent.checkLocationOnResume() = _CheckLocationOnResume;
   const factory CheckingEvent.dismissAlarm() = _DismissAlarm;
   const factory CheckingEvent.locationUpdated(double lat, double lng) = _LocationUpdated;
+  const factory CheckingEvent.startLocationService() = _StartLocationService;
+  const factory CheckingEvent.stopLocationService() = _StopLocationService;
+  const factory CheckingEvent.alarmTriggered(String title) = _AlarmTriggered;
+  const factory CheckingEvent.alarmDismissedByService() = _AlarmDismissedByService;
 }

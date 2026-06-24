@@ -12,6 +12,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import '../../../../base/bloc/index.dart';
 import '../../../../common/logger/index.dart';
 import '../../../../common/notification/index.dart';
+import '../../../../common/services/index.dart';
 import '../../data/datasource/model/saved_location.dart';
 import '../../data/repository/checking_repo.dart';
 
@@ -25,6 +26,7 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
   final LogUtils _log;
   final CheckingRepo _repo;
   final NotificationService _notificationService;
+  final LocationServiceManager _locationServiceManager;
 
   MapboxMap? mapboxMap;
   CircleAnnotationManager? circleAnnotationManager;
@@ -32,14 +34,15 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
   String? savedLocationId;
   
   StreamSubscription<geo.Position>? _locationSubscription;
-  final Set<String> _inZoneLocationIds = {};
 
   CheckingBloc(
     this._log,
     this._repo,
     this._notificationService,
+    this._locationServiceManager,
   ) : super(CheckingState.init()) {
     WidgetsBinding.instance.addObserver(this);
+    _setupLocationServiceCallbacks();
     
     on<CheckingEvent>((event, emit) async {
       await event.when(
@@ -58,8 +61,85 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
         checkLocationOnResume: () => _checkLocationOnResume(emit),
         dismissAlarm: () => _dismissAlarm(emit),
         locationUpdated: (lat, lng) => _onLocationUpdated(lat, lng, emit),
+        startLocationService: () => _startLocationService(emit),
+        stopLocationService: () => _stopLocationService(emit),
+        alarmTriggered: (title) => _onAlarmTriggered(emit),
+        alarmDismissedByService: () => _onAlarmDismissedByService(emit),
       );
     });
+  }
+
+   _setupLocationServiceCallbacks() {
+    _locationServiceManager.onLocationUpdate = (lat, lng, distance, isInZone) {
+      add(CheckingEvent.locationUpdated(lat, lng));
+      _log.logI('Native service location: lat=$lat, lng=$lng, distance=$distance, isInZone=$isInZone');
+    };
+
+    _locationServiceManager.onAlarmTriggered = (title) {
+      _log.logI('Native alarm triggered: $title');
+      add(CheckingEvent.alarmTriggered(title));
+    };
+
+    _locationServiceManager.onAlarmDismissed = () {
+      _log.logI('Native alarm dismissed');
+      add(CheckingEvent.alarmDismissedByService());
+    };
+  }
+
+   _onAlarmTriggered(Emitter<CheckingState> emit) {
+    emit(state.copyWith(
+      isAlarmPlaying: true,
+      alarmDismissed: false,
+    ));
+  }
+
+   _onAlarmDismissedByService(Emitter<CheckingState> emit) {
+    emit(state.copyWith(
+      isAlarmPlaying: false,
+      alarmDismissed: true,
+    ));
+  }
+
+  Future<void> _startLocationService(Emitter<CheckingState> emit) async {
+    if (state.selectedLocationId == null) return;
+
+    final location = state.savedLocations.firstWhere(
+      (loc) => loc.id == state.selectedLocationId,
+      orElse: () => SavedLocation(
+        id: '',
+        title: 'Vị trí',
+        lat: state.lat ?? 0.0,
+        lng: state.lng ?? 0.0,
+        radius: state.radius,
+        createdAt: DateTime.now(),
+      ),
+    );
+
+    try {
+      // Stop existing service first to prevent duplicates
+      await _locationServiceManager.stopService();
+      
+      // Start service with new location
+      await _locationServiceManager.startService(
+        targetLat: location.lat,
+        targetLng: location.lng,
+        radius: location.radius,
+        title: location.title,
+        notificationEnabled: location.notificationEnabled,
+      );
+      _log.logI('Native location service started for: ${location.title}');
+    } catch (e) {
+      _log.logE('Failed to start native location service: $e');
+    }
+  }
+
+  Future<void> _stopLocationService(Emitter<CheckingState> emit) async {
+    try {
+      await _locationServiceManager.stopService();
+      _log.logI('Native location service stopped');
+    } catch (e) {
+      _log.logE('Failed to stop native location service: $e');
+    }
   }
 
   @override
@@ -89,57 +169,29 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
   }
 
   Future<void> _onLocationUpdated(double lat, double lng, Emitter<CheckingState> emit) async {
-    // Update current position
+    // Update current position for UI
     emit(state.copyWith(lat: lat, lng: lng));
     
-    // Check all locations with notification enabled
-    for (final location in state.savedLocations) {
-      if (!location.notificationEnabled) continue;
-      
-      final distance = geo.Geolocator.distanceBetween(
-        lat, lng, location.lat, location.lng,
+    // Update distance for selected location (UI only)
+    if (state.selectedLocationId != null) {
+      final selectedLocation = state.savedLocations.firstWhere(
+        (loc) => loc.id == state.selectedLocationId,
+        orElse: () => SavedLocation(
+          id: '',
+          title: '',
+          lat: lat,
+          lng: lng,
+          radius: state.radius,
+          createdAt: DateTime.now(),
+        ),
       );
       
-      final isInZone = distance <= location.radius;
-      final wasInZone = _inZoneLocationIds.contains(location.id);
+      final distance = geo.Geolocator.distanceBetween(
+        lat, lng, selectedLocation.lat, selectedLocation.lng,
+      );
       
-      if (isInZone && !wasInZone) {
-        // Just entered zone - trigger alarm
-        _log.logI('Entered zone: ${location.title}');
-        _inZoneLocationIds.add(location.id);
-        
-        await _notificationService.startAlarm(
-          locationId: location.id,
-          locationTitle: location.title,
-        );
-        
-        // Update state if this is the selected location
-        if (location.id == state.selectedLocationId) {
-          emit(state.copyWith(
-            distanceToZone: distance,
-            isInZone: true,
-            isAlarmPlaying: true,
-            alarmDismissed: false,
-          ));
-        }
-      } else if (!isInZone && wasInZone) {
-        // Just exited zone - reset alarm
-        _log.logI('Exited zone: ${location.title}');
-        _inZoneLocationIds.remove(location.id);
-        
-        if (location.id == state.selectedLocationId) {
-          await _notificationService.cancelInZoneNotification();
-          emit(state.copyWith(
-            distanceToZone: distance,
-            isInZone: false,
-            isAlarmPlaying: false,
-            alarmDismissed: false,
-          ));
-        }
-      } else if (location.id == state.selectedLocationId) {
-        // Update distance for selected location
-        emit(state.copyWith(distanceToZone: distance, isInZone: isInZone));
-      }
+      final isInZone = distance <= selectedLocation.radius;
+      emit(state.copyWith(distanceToZone: distance, isInZone: isInZone));
     }
   }
 
@@ -191,7 +243,7 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
     }
   }
 
-  /// Check if user entered zone and trigger notification
+  /// Check if user entered zone - notification is handled by native service
   Future<double> _checkZoneEntry(
     String? locationId,
     double currentLat,
@@ -214,25 +266,10 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
       isInZone: isInZone,
     ));
 
-    // Trigger notification if in zone AND alarm not playing AND notification enabled
-    if (isInZone && !state.isAlarmPlaying && !state.alarmDismissed && locationId != null) {
-      final location = state.savedLocations.where((loc) => loc.id == locationId).firstOrNull;
-      if (location != null && location.notificationEnabled) {
-        final locationTitle = _getLocationTitle(locationId);
-        await _notificationService.startAlarm(
-          locationId: locationId,
-          locationTitle: locationTitle,
-        );
-        emit(state.copyWith(isAlarmPlaying: true));
-      }
-    }
+    // Notification is handled by native Android service
+    // Don't trigger from Flutter to avoid duplicate notifications
 
     return distanceInMeters;
-  }
-
-  String _getLocationTitle(String locationId) {
-    final location = state.savedLocations.where((loc) => loc.id == locationId).firstOrNull;
-    return location?.title ?? state.title ?? 'Vị trí';
   }
 
   Future<void> _onInit(
@@ -274,6 +311,9 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
       
       // Start continuous location tracking
       _startLocationTracking();
+      
+      // Start native location service for background tracking
+      add(CheckingEvent.startLocationService());
     } catch (e, st) {
       _log.logE('Location error, fallback to default: $e\n$st');
       emit(state.copyWith(
@@ -500,6 +540,9 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
     // Calculate distance and trigger notification if needed
     await _calculateDistance(id, lat, lng, emit);
     
+    // Update native service with new location
+    add(CheckingEvent.startLocationService());
+    
     emit(state.copyWith(
       lat: lat,
       lng: lng,
@@ -708,11 +751,13 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
     final newEnabled = !location.notificationEnabled;
     final actionText = newEnabled ? 'bật' : 'tắt';
 
-    // Update notification service
-    if (newEnabled) {
-      _notificationService.enableLocationNotification(id);
-    } else {
-      _notificationService.disableLocationNotification(id);
+    // Update native service if this is the selected location
+    if (id == state.selectedLocationId) {
+      if (newEnabled) {
+        await _locationServiceManager.enableAlarm();
+      } else {
+        await _locationServiceManager.disableAlarm();
+      }
     }
 
     // Update local state
@@ -734,7 +779,10 @@ class CheckingBloc extends BaseBloc<CheckingEvent, CheckingState> with WidgetsBi
   }
 
   Future<void> _dismissAlarm(Emitter<CheckingState> emit) async {
-    await _notificationService.stopAlarm();
+    // Dismiss alarm on native service
+    await _locationServiceManager.dismissAlarm();
+    
+    // Update state
     emit(state.copyWith(
       isAlarmPlaying: false,
       alarmDismissed: true,

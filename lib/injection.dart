@@ -6,6 +6,7 @@ import 'common/app/index.dart';
 import 'common/constants/api_config.dart';
 import 'common/logger/index.dart';
 import 'common/notification/index.dart';
+import 'common/services/index.dart';
 import 'common/utils/snack_bar_helper.dart';
 import 'features/checking/data/datasource/service/checking_service.dart';
 import 'features/checking/data/datasource/service/supabase_service.dart';
@@ -71,12 +72,18 @@ void configDependencies() {
     () => NotificationService(getIt<LogUtils>()),
   );
 
+  // ==== LOCATION SERVICE ====
+  getIt.registerLazySingleton<LocationServiceManager>(
+    () => LocationServiceManager(getIt<LogUtils>()),
+  );
+
   // ==== BLOC ====
   getIt.registerFactory<CheckingBloc>(
     () => CheckingBloc(
       getIt<LogUtils>(),
       getIt<CheckingRepo>(),
       getIt<NotificationService>(),
+      getIt<LocationServiceManager>(),
     ),
   );
 }
